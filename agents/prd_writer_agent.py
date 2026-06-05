@@ -4,8 +4,14 @@ from dotenv import load_dotenv
 import streamlit as st
 load_dotenv()
 
+def get_groq_api_key():
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        return os.getenv("GROQ_API_KEY")
+
 client = OpenAI(
-    api_key=st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY"),
+    api_key=get_groq_api_key() ,
     base_url="https://api.groq.com/openai/v1"
 )
 
