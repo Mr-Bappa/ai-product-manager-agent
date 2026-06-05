@@ -1,77 +1,99 @@
-import chromadb
+import os
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
+from pinecone import Pinecone, ServerlessSpec
 
-# This model runs locally — no API call needed
-# Downloads once (~90MB), then cached on your machine
+load_dotenv()
+
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+INDEX_NAME      = os.getenv("PINECONE_INDEX", "pm-knowledge")
 
-# Where ChromaDB stores its files
-CHROMA_PATH = "chroma_db"
+# Dimension of all-MiniLM-L6-v2 output — always 384
+EMBEDDING_DIM   = 384
+
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        print(f"Loading embedding model: {EMBEDDING_MODEL}")
+        _model = SentenceTransformer(EMBEDDING_MODEL)
+    return _model
 
 
-def get_chroma_client():
-    return chromadb.PersistentClient(path=CHROMA_PATH)
-
-
-def get_or_create_collection(client, collection_name: str = "pm_knowledge"):
+def get_pinecone_index():
     """
-    Gets existing collection or creates a new one.
-    A collection is like a table in a regular database.
+    Connects to Pinecone and returns the index.
+    Creates the index if it does not exist yet.
     """
-    return client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"}  # cosine = best for text similarity
-    )
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+    existing_indexes = [i.name for i in pc.list_indexes()]
+
+    if INDEX_NAME not in existing_indexes:
+        print(f"Creating Pinecone index: {INDEX_NAME}")
+        pc.create_index(
+            name      = INDEX_NAME,
+            dimension = EMBEDDING_DIM,
+            metric    = "cosine",
+            spec      = ServerlessSpec(
+                cloud  = "aws",
+                region = "us-east-1"     # change if your account uses a different region
+            )
+        )
+        print(f"[✓ Index created: {INDEX_NAME}]")
+    else:
+        print(f"[✓ Index found: {INDEX_NAME}]")
+
+    return pc.Index(INDEX_NAME)
 
 
-def embed_and_store(documents: list, collection_name: str = "pm_knowledge"):
+def embed_and_store(documents: list):
     """
     Takes list of document dicts from loader.py.
-    Converts each chunk to a vector.
-    Stores vectors + original text in ChromaDB.
+    Embeds each chunk and stores in Pinecone.
     """
     if not documents:
         print("[No documents to embed]")
         return
 
-    print(f"Loading embedding model: {EMBEDDING_MODEL}")
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    model = get_model()
+    index = get_pinecone_index()
 
-    client = get_chroma_client()
-    collection = get_or_create_collection(client, collection_name)
-
-    # Prepare data for ChromaDB
     texts     = [doc["text"]     for doc in documents]
     ids       = [doc["chunk_id"] for doc in documents]
     metadatas = [
         {
             "source":   doc["source"],
-            "category": doc["category"]
+            "category": doc["category"],
+            "text":     doc["text"]      # store text in metadata for retrieval
         }
         for doc in documents
     ]
 
-    print(f"Embedding {len(texts)} chunks... (this takes a minute first time)")
+    print(f"Embedding {len(texts)} chunks...")
     embeddings = model.encode(texts, show_progress_bar=True).tolist()
 
-    # Store in batches of 100 to avoid memory issues
+    # Pinecone expects: list of (id, vector, metadata)
+    vectors = [
+        (ids[i], embeddings[i], metadatas[i])
+        for i in range(len(texts))
+    ]
+
+    # Upload in batches of 100
     batch_size = 100
-    for i in range(0, len(texts), batch_size):
-        collection.upsert(
-            ids=ids[i:i+batch_size],
-            documents=texts[i:i+batch_size],
-            embeddings=embeddings[i:i+batch_size],
-            metadatas=metadatas[i:i+batch_size]
-        )
-        print(f"Stored batch {i//batch_size + 1}")
+    for i in range(0, len(vectors), batch_size):
+        batch = vectors[i:i+batch_size]
+        index.upsert(vectors=batch)
+        print(f"Uploaded batch {i//batch_size + 1} of {(len(vectors)-1)//batch_size + 1}")
 
-    print(f"\n[✓ {len(texts)} chunks embedded and stored in ChromaDB]")
+    print(f"\n[✓ {len(texts)} chunks stored in Pinecone]")
 
 
-def get_collection_stats():
-    """Shows how many chunks are stored."""
-    client = get_chroma_client()
-    collection = get_or_create_collection(client)
-    count = collection.count()
-    print(f"[ChromaDB has {count} chunks stored]")
+def get_index_stats():
+    """Shows how many vectors are stored."""
+    index = get_pinecone_index()
+    stats = index.describe_index_stats()
+    count = stats["total_vector_count"]
+    print(f"[Pinecone has {count} vectors stored]")
     return count

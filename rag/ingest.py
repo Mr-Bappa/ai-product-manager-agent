@@ -1,9 +1,10 @@
 from rag.loader import load_all_documents
-from rag.embedder import embed_and_store, get_collection_stats
+from rag.embedder import embed_and_store, get_index_stats
+
 
 def ingest():
     print("=" * 50)
-    print("  RAG Ingestion Pipeline")
+    print("  RAG Ingestion Pipeline — Pinecone")
     print("  Reading knowledge_base/ folder...")
     print("=" * 50 + "\n")
 
@@ -18,8 +19,9 @@ def ingest():
         return
 
     embed_and_store(documents)
-    get_collection_stats()
-    print("\n[✓ Knowledge base ready]")
+    get_index_stats()
+    print("\n[✓ Knowledge base ready in Pinecone]")
+
 
 if __name__ == "__main__":
     ingest()
