@@ -7,6 +7,7 @@ from agents.persona_agent import run_persona_agent
 from agents.pain_point_agent import run_pain_point_agent
 from agents.opportunity_scorer_agent import run_opportunity_scorer
 from agents.prd_writer_agent import run_prd_writer
+from utils.docx_exporter import build_prd_docx
 
 load_dotenv()
 
@@ -213,20 +214,48 @@ with left_col:
         </div>""", unsafe_allow_html=True)
 
     # Download button — appears after pipeline runs
+    # Download buttons — appear after pipeline runs
     if st.session_state.pipeline_done:
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # ── Build full text report ─────────────────
         full_report = f"AI PRODUCT MANAGER REPORT\n{'='*50}\n\n"
         full_report += f"ORIGINAL FEEDBACK:\n{st.session_state.feedback_submitted}\n\n"
         for section, content in st.session_state.results.items():
             full_report += f"{'='*50}\n{section}\n{'='*50}\n{content}\n\n"
 
+        # ── .txt download ──────────────────────────
         st.download_button(
-            label="⬇ Download Full Report (.txt)",
+            label="⬇ Download Report (.txt)",
             data=full_report,
             file_name="pm_report.txt",
             mime="text/plain"
         )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── .docx download ─────────────────────────
+        # Only build the Word doc if PRD exists
+        if "AGENT 5 — PRD" in st.session_state.results:
+            try:
+                docx_bytes = build_prd_docx(
+                    original_feedback    = st.session_state.feedback_submitted,
+                    jtbd_output          = st.session_state.results.get("AGENT 1 — JTBD ANALYSIS", ""),
+                    persona_output       = st.session_state.results.get("AGENT 2 — USER PERSONA", ""),
+                    pain_point_output    = st.session_state.results.get("AGENT 3 — PAIN POINT ANALYSIS", ""),
+                    opportunity_output   = st.session_state.results.get("AGENT 4 — OPPORTUNITY SCORING", ""),
+                    prd_output           = st.session_state.results.get("AGENT 5 — PRD", "")
+                )
+
+                st.download_button(
+                    label     = "⬇ Download PRD (.docx)",
+                    data      = docx_bytes,
+                    file_name = "pm_report.docx",
+                    mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+
+            except Exception as e:
+                st.error(f"Could not generate Word file: {e}")
 
 
 # ── RIGHT COLUMN: Agent outputs ────────────────────────────────────
