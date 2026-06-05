@@ -1,6 +1,7 @@
 import os
-os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from dotenv import load_dotenv
+load_dotenv()
+os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN", "")
 import os
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
