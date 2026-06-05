@@ -9,6 +9,8 @@ from agents.opportunity_scorer_agent import run_opportunity_scorer
 from agents.prd_writer_agent import run_prd_writer
 from agents.chat_agent import chat_with_report
 from utils.docx_exporter import build_prd_docx
+# BAD — do not have this at top of app.py
+from rag.retriever import retrieve_for_agents
 
 load_dotenv()
 

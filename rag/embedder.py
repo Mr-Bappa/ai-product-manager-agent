@@ -1,37 +1,19 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()
-os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN", "")
-import os
-from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-INDEX_NAME      = os.getenv("PINECONE_INDEX", "pm-knowledge")
+INDEX_NAME    = os.getenv("PINECONE_INDEX", "pm-knowledge")
+EMBEDDING_DIM = 1024  # multilingual-e5-large dimension
 
-# Dimension of all-MiniLM-L6-v2 output — always 384
-EMBEDDING_DIM   = 384
 
-_model = None
-
-def get_model():
-    global _model
-    if _model is None:
-        print(f"Loading embedding model: {EMBEDDING_MODEL}")
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
+def get_pinecone_client():
+    return Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 
 def get_pinecone_index():
-    """
-    Connects to Pinecone and returns the index.
-    Creates the index if it does not exist yet.
-    """
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-
+    pc = get_pinecone_client()
     existing_indexes = [i.name for i in pc.list_indexes()]
 
     if INDEX_NAME not in existing_indexes:
@@ -42,7 +24,7 @@ def get_pinecone_index():
             metric    = "cosine",
             spec      = ServerlessSpec(
                 cloud  = "aws",
-                region = "us-east-1"     # change if your account uses a different region
+                region = "us-east-1"
             )
         )
         print(f"[✓ Index created: {INDEX_NAME}]")
@@ -52,16 +34,25 @@ def get_pinecone_index():
     return pc.Index(INDEX_NAME)
 
 
+def embed_text(pc: Pinecone, texts: list) -> list:
+    """
+    Uses Pinecone hosted embedding model.
+    No local model download needed — works on any server.
+    """
+    response = pc.inference.embed(
+        model      = "multilingual-e5-large",
+        inputs     = texts,
+        parameters = {"input_type": "passage"}
+    )
+    return [item["values"] for item in response]
+
+
 def embed_and_store(documents: list):
-    """
-    Takes list of document dicts from loader.py.
-    Embeds each chunk and stores in Pinecone.
-    """
     if not documents:
         print("[No documents to embed]")
         return
 
-    model = get_model()
+    pc    = get_pinecone_client()
     index = get_pinecone_index()
 
     texts     = [doc["text"]     for doc in documents]
@@ -70,32 +61,39 @@ def embed_and_store(documents: list):
         {
             "source":   doc["source"],
             "category": doc["category"],
-            "text":     doc["text"]      # store text in metadata for retrieval
+            "text":     doc["text"]
         }
         for doc in documents
     ]
 
-    print(f"Embedding {len(texts)} chunks...")
-    embeddings = model.encode(texts, show_progress_bar=True).tolist()
+    # Pinecone inference allows max 96 inputs per call
+    batch_size  = 50
+    all_vectors = []
 
-    # Pinecone expects: list of (id, vector, metadata)
-    vectors = [
-        (ids[i], embeddings[i], metadatas[i])
-        for i in range(len(texts))
-    ]
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i+batch_size]
+        batch_ids   = ids[i:i+batch_size]
+        batch_meta  = metadatas[i:i+batch_size]
 
-    # Upload in batches of 100
-    batch_size = 100
-    for i in range(0, len(vectors), batch_size):
-        batch = vectors[i:i+batch_size]
-        index.upsert(vectors=batch)
-        print(f"Uploaded batch {i//batch_size + 1} of {(len(vectors)-1)//batch_size + 1}")
+        print(f"Embedding batch {i//batch_size + 1} of {-(-len(texts)//batch_size)}...")
+        embeddings = embed_text(pc, batch_texts)
 
-    print(f"\n[✓ {len(texts)} chunks stored in Pinecone]")
+        for j in range(len(batch_texts)):
+            all_vectors.append((
+                batch_ids[j],
+                embeddings[j],
+                batch_meta[j]
+            ))
+
+    # Upload to Pinecone in batches of 100
+    for i in range(0, len(all_vectors), 100):
+        index.upsert(vectors=all_vectors[i:i+100])
+        print(f"Uploaded batch {i//100 + 1} of {-(-len(all_vectors)//100)}")
+
+    print(f"\n[✓ {len(all_vectors)} chunks stored in Pinecone]")
 
 
 def get_index_stats():
-    """Shows how many vectors are stored."""
     index = get_pinecone_index()
     stats = index.describe_index_stats()
     count = stats["total_vector_count"]

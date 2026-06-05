@@ -1,25 +1,27 @@
 import os
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
 
 load_dotenv()
 
-INDEX_NAME      = os.getenv("PINECONE_INDEX", "pm-knowledge")
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-_model = None
-
-def get_model():
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
+INDEX_NAME = os.getenv("PINECONE_INDEX", "pm-knowledge")
 
 
-def get_pinecone_index():
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    return pc.Index(INDEX_NAME)
+def get_pinecone_client():
+    return Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+
+def embed_query(pc: Pinecone, query: str) -> list:
+    """
+    Embeds a search query using Pinecone hosted model.
+    input_type 'query' is different from 'passage' used during storage.
+    """
+    response = pc.inference.embed(
+        model      = "multilingual-e5-large",
+        inputs     = [query],
+        parameters = {"input_type": "query"}
+    )
+    return response[0]["values"]
 
 
 def retrieve(
@@ -27,42 +29,35 @@ def retrieve(
     n_results: int = 4,
     category: str = None
 ) -> str:
-    """
-    Searches Pinecone for chunks relevant to the query.
-    Returns formatted context string.
-    """
     try:
-        model = get_model()
-        index = get_pinecone_index()
+        pc    = get_pinecone_client()
+        index = pc.Index(INDEX_NAME)
 
-        # Check index has content
         stats = index.describe_index_stats()
         if stats["total_vector_count"] == 0:
             return ""
 
-        query_embedding = model.encode([query]).tolist()[0]
+        query_embedding = embed_query(pc, query)
 
-        # Build category filter
         filter_dict = {"category": {"$eq": category}} if category else None
 
         results = index.query(
-            vector          = query_embedding,
-            top_k           = n_results,
-            include_metadata= True,
-            filter          = filter_dict
+            vector           = query_embedding,
+            top_k            = n_results,
+            include_metadata = True,
+            filter           = filter_dict
         )
 
         if not results["matches"]:
             return ""
 
-        # Format into readable context block
         context_parts = []
         for match in results["matches"]:
-            meta       = match["metadata"]
-            relevance  = round(match["score"] * 100, 1)
-            text       = meta.get("text", "")
-            source     = meta.get("source", "unknown")
-            cat        = meta.get("category", "unknown")
+            meta      = match["metadata"]
+            relevance = round(match["score"] * 100, 1)
+            text      = meta.get("text", "")
+            source    = meta.get("source", "unknown")
+            cat       = meta.get("category", "unknown")
 
             context_parts.append(
                 f"[Source: {source} | Category: {cat} | "
@@ -77,10 +72,6 @@ def retrieve(
 
 
 def retrieve_for_agents(user_feedback: str) -> dict:
-    """
-    Runs targeted searches for each agent.
-    Returns a dict of context strings.
-    """
     return {
         "jtbd": retrieve(
             query    = f"user jobs motivations goals: {user_feedback}",
