@@ -1,4 +1,7 @@
 import os
+os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import os
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
